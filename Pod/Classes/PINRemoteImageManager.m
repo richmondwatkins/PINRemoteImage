@@ -116,6 +116,7 @@ typedef void (^PINRemoteImageManagerDataCompletion)(NSData *data, NSError *error
 @property (nonatomic, assign) float lowQualityBPSThreshold;
 @property (nonatomic, assign) BOOL shouldUpgradeLowQualityImages;
 @property (nonatomic, copy) PINRemoteImageManagerAuthenticationChallenge authenticationChallengeHandler;
+
 #if DEBUG
 @property (nonatomic, assign) float currentBPS;
 @property (nonatomic, assign) BOOL overrideBPS;
@@ -397,6 +398,8 @@ typedef void (^PINRemoteImageManagerDataCompletion)(NSData *data, NSError *error
     //If so, special case this to avoid flashing the UI
     id object = [self.cache.memoryCache objectForKey:key];
     if (object) {
+        self.imageIsFromCache = YES;
+        
         if ([self earlyReturnWithOptions:options url:url object:object completion:completion]) {
             return nil;
         }
@@ -443,6 +446,9 @@ typedef void (^PINRemoteImageManagerDataCompletion)(NSData *data, NSError *error
                         {
                             typeof(self) strongSelf = weakSelf;
                             if (object) {
+                                
+                                self.imageIsFromCache = YES;
+                                
                                 UIImage *image = nil;
                                 FLAnimatedImage *animatedImage = nil;
                                 BOOL valid = [strongSelf handleCacheObject:cache
@@ -615,14 +621,14 @@ typedef void (^PINRemoteImageManagerDataCompletion)(NSData *data, NSError *error
                         UUID:(NSUUID *)UUID
 {
     [self lock];
-        PINRemoteImageDownloadTask *task = [self.tasks objectForKey:key];
-        if (task.urlSessionTaskOperation == nil && task.callbackBlocks.count > 0) {
-            //If completionBlocks.count == 0, we've canceled before we were even able to start.
-            CFTimeInterval startTime = CACurrentMediaTime();
-            PINDataTaskOperation *urlSessionTaskOperation = [self sessionTaskWithURL:url key:key options:options priority:priority];
-            task.urlSessionTaskOperation = urlSessionTaskOperation;
-            task.sessionTaskStartTime = startTime;
-        }
+    PINRemoteImageDownloadTask *task = [self.tasks objectForKey:key];
+    if (task.urlSessionTaskOperation == nil && task.callbackBlocks.count > 0) {
+        //If completionBlocks.count == 0, we've canceled before we were even able to start.
+        CFTimeInterval startTime = CACurrentMediaTime();
+        PINDataTaskOperation *urlSessionTaskOperation = [self sessionTaskWithURL:url key:key options:options priority:priority];
+        task.urlSessionTaskOperation = urlSessionTaskOperation;
+        task.sessionTaskStartTime = startTime;
+    }
     [self unlock];
 }
 
