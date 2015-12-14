@@ -24,8 +24,6 @@
 @property (nonatomic, strong) UIImage *cachedImage;
 @property (nonatomic, assign) NSUInteger currentThreshold;
 @property (nonatomic, assign) float bytesPerSecond;
-@property (nonatomic, strong) CIContext *processingContext;
-@property (nonatomic, strong) CIFilter *gaussianFilter;
 @property (nonatomic, assign) NSUInteger scannedByte;
 @property (nonatomic, assign) NSInteger sosCount;
 @property (nonatomic, strong) NSLock *lock;
@@ -43,11 +41,21 @@
 @synthesize estimatedRemainingTimeThreshold = _estimatedRemainingTimeThreshold;
 @synthesize startTime = _startTime;
 
+static CIContext *GPUProcessingContext = nil;
+static CIContext *CPUProcessingContext = nil;
+
 - (instancetype)init
 {
     if (self = [super init]) {
         self.lock = [[NSLock alloc] init];
         self.lock.name = @"PINProgressiveImage";
+        
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            //CIContexts are immutable and threadsafe
+            CPUProcessingContext = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer : @YES}];
+            GPUProcessingContext = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer : @NO, kCIContextPriorityRequestLow: @YES}];
+        });
         
         _imageSource = CGImageSourceCreateIncremental(NULL);;
         self.size = CGSizeZero;
@@ -62,7 +70,7 @@
         self.scanTime = 0;
 #endif
         
-#if PIN_APP_EXTENSIONS
+#if NS_EXTENSION_UNAVAILABLE_IOS
         self.inBackground = YES;
 #else
         self.inBackground = [[UIApplication sharedApplication] applicationState] != UIApplicationStateActive;
@@ -76,12 +84,11 @@
 - (void)dealloc
 {
     [self.lock lock];
-        self.processingContext = nil;
         if (self.imageSource) {
             CFRelease(_imageSource);
         }
     [self.lock unlock];
-#if !PIN_APP_EXTENSIONS
+#if !NS_EXTENSION_UNAVAILABLE_IOS
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 #endif
 }
@@ -92,7 +99,6 @@
 {
     [self.lock lock];
         self.inBackground = YES;
-        self.processingContext = nil;
     [self.lock unlock];
 }
 
@@ -336,44 +342,52 @@
 //Must be called within lock
 - (UIImage *)postProcessImage:(UIImage *)inputImage withProgress:(float)progress
 {
-    if (inputImage == nil) {
+    CGImageRef inputImageRef = CGImageRetain(inputImage.CGImage);
+    if (inputImageRef == nil) {
         return nil;
     }
     
-    if (self.processingContext == nil) {
-        self.processingContext = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer : @(self.inBackground), kCIContextPriorityRequestLow: @YES}];
-    }
-    
-    if (self.gaussianFilter == nil) {
-        self.gaussianFilter = [CIFilter filterWithName:@"CIGaussianBlur"];
-        [self.gaussianFilter setDefaults];
-    }
+    CIFilter *gaussianFilter = [CIFilter filterWithName:@"CIGaussianBlur"];
+    [gaussianFilter setDefaults];
     
     UIImage *outputUIImage = nil;
-    if (self.processingContext && self.gaussianFilter) {
-        [self.gaussianFilter setValue:[CIImage imageWithCGImage:inputImage.CGImage]
-                               forKey:kCIInputImageKey];
+    
+    CIContext *processingContext = GPUProcessingContext;
+    if (self.inBackground) {
+        processingContext = CPUProcessingContext;
+    }
+    
+    CGSize maxInput = processingContext.inputImageMaximumSize;
+    CGSize maxOutput = processingContext.outputImageMaximumSize;
+    CGSize inputSize = inputImage.size;
+    if (maxInput.height < inputSize.height ||
+        maxInput.width < inputSize.width ||
+        maxOutput.height < inputSize.height ||
+        maxOutput.width < inputSize.width) {
+        CGImageRelease(inputImageRef);
+        return nil;
+    }
+    
+    if (processingContext && gaussianFilter) {
+        [gaussianFilter setValue:[CIImage imageWithCGImage:inputImageRef]
+                          forKey:kCIInputImageKey];
         
-        CGFloat radius = inputImage.size.width / 50.0;
-        radius = radius * MAX(0, 1.0 - progress);
-        [self.gaussianFilter setValue:[NSNumber numberWithFloat:radius]
-                               forKey:kCIInputRadiusKey];
+        NSNumber *radius = @((inputImage.size.width / 50.0) * MAX(0, 1.0 - progress));
+        [gaussianFilter setValue:radius
+                          forKey:kCIInputRadiusKey];
         
-        CIImage *outputImage = [self.gaussianFilter outputImage];
+        CIImage *outputImage = [gaussianFilter outputImage];
         if (outputImage) {
-            CGImageRef outputImageRef = [self.processingContext createCGImage:outputImage fromRect:CGRectMake(0, 0, inputImage.size.width, inputImage.size.height)];
+            CGImageRef outputImageRef = [processingContext createCGImage:outputImage fromRect:CGRectMake(0, 0, inputImage.size.width, inputImage.size.height)];
             
             if (outputImageRef) {
-                //"decoding" the image here copies it to CPU memory?
-                outputUIImage = [UIImage pin_decodedImageWithCGImageRef:outputImageRef];
+                outputUIImage = [UIImage imageWithCGImage:outputImageRef];
                 CGImageRelease(outputImageRef);
             }
         }
     }
     
-    if (outputUIImage == nil) {
-        outputUIImage = inputImage;
-    }
+    CGImageRelease(inputImageRef);
     
     return outputUIImage;
 }

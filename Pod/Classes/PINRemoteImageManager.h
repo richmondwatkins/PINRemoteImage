@@ -14,9 +14,6 @@
 @class PINCache;
 @class PINRemoteImageManagerResult;
 
-/*
- @warning when using in extension or watch extension, define PIN_APP_EXTENSIONS=1
- */
 
 extern NSString * const PINRemoteImageManagerErrorDomain;
 
@@ -35,7 +32,7 @@ typedef NS_ENUM(NSUInteger, PINRemoteImageManagerError) {
 /**
  Options with which to download and process images
  */
-typedef NS_ENUM(NSUInteger, PINRemoteImageManagerDownloadOptions) {
+typedef NS_OPTIONS(NSUInteger, PINRemoteImageManagerDownloadOptions) {
     /** Download and process with default options (no other options set) */
     PINRemoteImageManagerDownloadOptionsNone = 0,
     /** Regardless of the image type downloaded, return UIImages and *not* FLAnimatedImage */
